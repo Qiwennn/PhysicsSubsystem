@@ -71,8 +71,8 @@ bool PhysicsManager::collisionDetectionAll()
 		{
 			MeshInstance *pInst = pMesh->m_instances[j].getObject<MeshInstance>();
 			PhysicsManager *pPM = pInst->getFirstComponent<PhysicsManager>();
-
-			// do collision test here toward each MeshInstance
+			
+			// Run the narrow-phase test against each MeshInstance we encounter
 			if (pPM && checkCollisionPhysicsManager(pPM))
 			{
 				++m_collisionCount;
@@ -98,10 +98,9 @@ bool PhysicsManager::collisionDetectionAll()
 
 bool PhysicsManager::checkCollisionPhysicsManager(PhysicsManager *pPM)
 {
-	// Non-Axis Aligned Bounding Box Collision
-	// Separating Axis Theorem
-	// project 2 * 8 vectors to 3 * 2 normal vectors, for each combination check line segment intersecting
-	// if there is one no overlapping => no collision
+	// Oriented box vs. oriented box using the Separating Axis Theorem (SAT).
+	// Project both sets of 8 corners onto 6 candidate axes (3 from each box).
+	// If any axis yields disjoint intervals, there is no overlap => no collision.
 	Vector3 separatingAxes[6] = { 
 		m_boundingBoxPlanes[0].getN(), m_boundingBoxPlanes[1].getN(), m_boundingBoxPlanes[2].getN(),
 		pPM->m_boundingBoxPlanes[0].getN(), pPM->m_boundingBoxPlanes[1].getN(), pPM->m_boundingBoxPlanes[2].getN() };
@@ -134,6 +133,7 @@ bool PhysicsManager::checkCollisionPhysicsManager(PhysicsManager *pPM)
 
 bool PhysicsManager::checkSegmentIntersect(float lminP, float lmaxP, float rminP, float rmaxP)
 {
+	// Intervals [lminP, lmaxP] and [rminP, rmaxP] overlap iff neither is strictly to one side of the other
 	return !(lmaxP < rminP || rmaxP < lminP);
 }
 
@@ -148,7 +148,9 @@ void PhysicsManager::addCollisionPlane(PhysicsManager *pPM)
 
 	for (int i = 0; i < 3; ++i)
 	{
-		if (checkPlane[i] ^ checkPlane[i + 3])  // check the paired plane, ex: 0 and 4 is top and bottom
+		// Compare each plane with its opposite face (i vs i+3: e.g., bottom/top).
+		// If exactly one of the pair intersects, record that specific plane.
+		if (checkPlane[i] ^ checkPlane[i + 3])
 		{
 			checkPlane[i] ? m_collisionPlane.add(pPM->m_boundingBoxPlanes[i]) :
 			                m_collisionPlane.add(pPM->m_boundingBoxPlanes[i + 3]);
@@ -161,10 +163,11 @@ bool PhysicsManager::checkCollisionPlane(Plane &p)
 	for (int i = 0; i < 8; ++i) {
 		Vector3 extent = m_boundingBoxVertexAfterTransform[i] - m_boundingBoxCenter;
 
-		float d_projection = abs(p.getN().dotProduct(extent));  // distance of the rear vertex projecting on p's n vector
+		// Project half-extent onto plane normal, compare against center-to-plane distance
+		float d_projection = abs(p.getN().dotProduct(extent));  // projected half-width along plane normal
 		float d_centerToP = abs(m_boundingBoxCenter.dotProduct(p.getN()) + p.getD());
 
-		//return (d_centerToP <= d_projection) && !(p == Plane());
+		// A hit occurs if the center-to-plane distance is within the projected half-extent
 		if ((d_centerToP <= d_projection) && (p != Plane())) return true;
 	}
 	return false;
@@ -208,14 +211,14 @@ void PhysicsManager::buildBoundingVolume(float minX, float maxX, float minY, flo
 	m_boundingBox[3].setV(Vector3(0, minY - maxY, 0));
 	m_boundingBox[3].setN(Vector3(0, 0, minZ - maxZ));
 
-	// build AABB box by 8 points
-	// lower vertices
+	// Assemble the 8 local-space corners of the box
+	// lower ring
 	m_boundingBoxVertex[0] = Vector3(minX, minY, minZ);
 	m_boundingBoxVertex[1] = Vector3(minX, minY, maxZ);
 	m_boundingBoxVertex[2] = Vector3(maxX, minY, minZ);
 	m_boundingBoxVertex[3] = Vector3(maxX, minY, maxZ);
 
-	// higher vertices
+	// upper ring
 	m_boundingBoxVertex[4] = Vector3(minX, maxY, minZ);
 	m_boundingBoxVertex[5] = Vector3(minX, maxY, maxZ);
 	m_boundingBoxVertex[6] = Vector3(maxX, maxY, minZ);
@@ -231,7 +234,7 @@ void PhysicsManager::buildBoundingVolumeAfterTransform(const Matrix4x4 &worldMat
 	
 	m_normalVector = m_boundingBoxVertexAfterTransform[4] - m_boundingBoxVertexAfterTransform[0];
 
-	// all normal vectors point to the inside of the box
+	// Plane normals are oriented inward for consistent half-space tests
 	m_boundingBoxPlanes[0].buildPlaneByPoints(m_boundingBoxVertexAfterTransform[0], m_boundingBoxVertexAfterTransform[1], m_boundingBoxVertexAfterTransform[2]);  // bottom
 	m_boundingBoxPlanes[1].buildPlaneByPoints(m_boundingBoxVertexAfterTransform[4], m_boundingBoxVertexAfterTransform[0], m_boundingBoxVertexAfterTransform[6]);  // match to [4]
 	m_boundingBoxPlanes[2].buildPlaneByPoints(m_boundingBoxVertexAfterTransform[5], m_boundingBoxVertexAfterTransform[1], m_boundingBoxVertexAfterTransform[4]);
@@ -245,6 +248,7 @@ void PhysicsManager::buildBoundingVolumeAfterTransform(const Matrix4x4 &worldMat
 
 void PhysicsManager::setBoundingBoxCenterAndHalfLength()
 {
+	// Center is the midpoint of the main diagonal (min->max corner)
 	m_boundingBoxCenter = (m_boundingBoxVertexAfterTransform[0] + m_boundingBoxVertexAfterTransform[7]) / 2.0f;
 
 	float lengthX = abs(m_boundingBoxVertexAfterTransform[2].getX() - m_boundingBoxVertexAfterTransform[0].getX());
